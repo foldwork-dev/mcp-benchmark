@@ -1,3 +1,3 @@
-module github.com/febin/mcp-benchmark
+module github.com/foldwork-dev/mcp-benchmark
 
 go 1.22

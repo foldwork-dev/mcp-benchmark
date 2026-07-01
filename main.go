@@ -17,7 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/febin/mcp-benchmark/compress"
+	"github.com/foldwork-dev/mcp-benchmark/compress"
 )
 
 // Version is the benchmark CLI version, overridden at build time via -ldflags.

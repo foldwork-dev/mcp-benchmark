@@ -2,7 +2,7 @@
 set -e
 
 VERSION="0.1.0"
-REPO="febin/mcp-benchmark"
+REPO="foldwork-dev/mcp-benchmark"
 BINARY="mcp-benchmark"
 
 # Detect OS and arch
@@ -35,4 +35,4 @@ echo ""
 echo "Run it on your project:"
 echo "  mcp-benchmark ./your-project"
 echo ""
-echo "Want the full MCP daemon? → https://github.com/febin/mcp-injector"
+echo "Want the full MCP daemon? → https://github.com/foldwork-dev/mcp-injector"
