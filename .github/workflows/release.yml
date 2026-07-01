@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      
+      - name: Build all targets
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          LDFLAGS="-s -w -X main.Version=v${VERSION}"
+          
+          GOOS=linux   GOARCH=amd64 go build -ldflags="$LDFLAGS" -o mcp-benchmark-linux-amd64
+          GOOS=linux   GOARCH=arm64 go build -ldflags="$LDFLAGS" -o mcp-benchmark-linux-arm64
+          GOOS=darwin  GOARCH=amd64 go build -ldflags="$LDFLAGS" -o mcp-benchmark-darwin-amd64
+          GOOS=darwin  GOARCH=arm64 go build -ldflags="$LDFLAGS" -o mcp-benchmark-darwin-arm64
+          GOOS=windows GOARCH=amd64 go build -ldflags="$LDFLAGS" -o mcp-benchmark-windows-amd64.exe
+          
+          sha256sum mcp-benchmark-* > checksums.sha256
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            mcp-benchmark-linux-amd64
+            mcp-benchmark-linux-arm64
+            mcp-benchmark-darwin-amd64
+            mcp-benchmark-darwin-arm64
+            mcp-benchmark-windows-amd64.exe
+            checksums.sha256
+          generate_release_notes: true
