@@ -4,6 +4,8 @@
 
 **mcp-benchmark** is a free, open-source CLI utility designed to measure and estimate token savings when analyzing codebases. It demonstrates the token reduction achieved by running code through the `mcp-injector` AST-based compression engine before sending context to large language models (LLMs) like Anthropic Claude, OpenAI GPT-4o, or Cursor.
 
+> 🔗 **Full MCP daemon:** [mcp-injector at foldwork.dev](https://foldwork.dev)
+
 ---
 
 ## ⚡ Real-World Codebase Context Benchmarks
@@ -74,13 +76,6 @@ Reproducible: `git clone https://github.com/django/django && mcp-injector-benchm
 `mcp-benchmark` is the measurement tool. **[mcp-injector](https://github.com/foldwork-dev/mcp-injector)** is the persistent local Model Context Protocol (MCP) server daemon that automatically integrates with **Claude Desktop**, **Cursor IDE**, and **VS Code (Continue)** to compress files live and support Compress-Cache-Retrieve (CCR) fetching.
 
 👉 Learn more at **[foldwork.dev/mcp-injector](https://github.com/foldwork-dev/mcp-injector)**
-
----
-
-## 🔑 SEO Keywords
-`Model Context Protocol`, `MCP server`, `Claude Desktop MCP`, `Cursor context optimizer`, `LLM prompt token compression`, `AST code folding`, `codebase context injection`, `AI agent coding context`, `context window optimization`, `prompt token optimizer`.
-
----
 
 ## 📄 License
 
