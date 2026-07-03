@@ -84,6 +84,11 @@ func main() {
 	}
 	flag.Parse()
 
+	if *flagTier < 1 || *flagTier > 3 {
+		fmt.Fprintf(os.Stderr, "Error: --tier must be 1, 2, or 3 (got %d)\n", *flagTier)
+		os.Exit(1)
+	}
+
 	if *flagVersion {
 		v := Version
 		if v != "dev" && !strings.HasPrefix(v, "v") {
@@ -111,6 +116,12 @@ func main() {
 		log.Fatalf("benchmark: %v", err)
 	}
 
+	if len(result.Files) == 0 {
+		fmt.Printf("No supported files found in %s\n", dir)
+		fmt.Printf("Supported extensions: .go .java .py .ts .tsx .js .jsx .rs .proto .vue .svelte .astro\n")
+		os.Exit(0)
+	}
+
 	if *flagMinSavings > 0 {
 		filtered := result.Files[:0]
 		for _, f := range result.Files {
@@ -136,6 +147,7 @@ func main() {
 
 func runBenchmark(dir string, tier int, pricePerMillion float64) (*BenchmarkResult, error) {
 	var files []FileResult
+	ignorePatterns := loadGitignore(dir)
 
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -148,7 +160,20 @@ func runBenchmark(dir string, tier int, pricePerMillion float64) (*BenchmarkResu
 				base == ".gradle" || base == "build" || base == "dist" {
 				return filepath.SkipDir
 			}
+			relPath, errRel := filepath.Rel(dir, path)
+			if errRel == nil && relPath != "." {
+				if matchesGitignore(ignorePatterns, relPath) {
+					return filepath.SkipDir
+				}
+			}
 			return nil
+		}
+
+		relPath, errRel := filepath.Rel(dir, path)
+		if errRel == nil && relPath != "." {
+			if matchesGitignore(ignorePatterns, relPath) {
+				return nil
+			}
 		}
 
 		ext := strings.ToLower(filepath.Ext(path))
@@ -166,6 +191,15 @@ func runBenchmark(dir string, tier int, pricePerMillion float64) (*BenchmarkResu
 			return nil
 		}
 		if len(src) == 0 {
+			return nil
+		}
+
+		limit := 512
+		if len(src) < limit {
+			limit = len(src)
+		}
+		if isBinary(src[:limit]) {
+			log.Printf("DEBUG: skipping binary file: %s", path)
 			return nil
 		}
 
@@ -197,7 +231,6 @@ func runBenchmark(dir string, tier int, pricePerMillion float64) (*BenchmarkResu
 		tokensSaved := rawTokens - compressedTokens
 		costSaved := float64(tokensSaved) / 1_000_000 * pricePerMillion
 
-		relPath, _ := filepath.Rel(dir, path)
 		files = append(files, FileResult{
 			Path:             relPath,
 			RawLines:         rawLines,
@@ -282,7 +315,7 @@ func printTable(r *BenchmarkResult) {
 			colFile, label,
 			colRaw, formatInt(f.RawTokens),
 			colComp, formatInt(f.CompressedTokens),
-			colSaved, fmt.Sprintf("%.0f%%", f.SavingsPct),
+			colSaved, fmt.Sprintf("%.1f%%", f.SavingsPct),
 			colCost, fmt.Sprintf("$%.4f", f.CostSavedPerRun))
 	}
 
@@ -339,4 +372,55 @@ func formatInt(n int) string {
 		out = append(out, byte(ch))
 	}
 	return string(out)
+}
+
+func loadGitignore(dir string) []string {
+	var patterns []string
+	for _, filename := range []string{".gitignore", ".aiignore"} {
+		path := filepath.Join(dir, filename)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue // no file is fine
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") {
+				patterns = append(patterns, line)
+			}
+		}
+	}
+	return patterns
+}
+
+func matchesGitignore(patterns []string, relPath string) bool {
+	for _, pattern := range patterns {
+		pat := strings.Trim(pattern, "/")
+		base := filepath.Base(relPath)
+
+		matched, _ := filepath.Match(pat, base)
+		if matched {
+			return true
+		}
+		matched, _ = filepath.Match(pat, relPath)
+		if matched {
+			return true
+		}
+		parts := strings.Split(relPath, string(filepath.Separator))
+		for _, part := range parts {
+			matched, _ = filepath.Match(pat, part)
+			if matched {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isBinary(data []byte) bool {
+	for _, b := range data {
+		if b == 0 {
+			return true
+		}
+	}
+	return !utf8.Valid(data)
 }

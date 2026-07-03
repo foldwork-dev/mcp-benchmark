@@ -2,6 +2,7 @@ package compress
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -231,5 +232,57 @@ It should not be compressed or altered in any way.
 
 	if string(tier3) != src {
 		t.Errorf("Expected original bytes returned for unsupported extension. Got:\n%s", string(tier3))
+	}
+}
+
+func TestPythonFoldedOutputIsValidSyntax(t *testing.T) {
+	src := `def hello():
+    x = 1
+    y = 2
+    return x + y
+
+class MyClass:
+    def method(self):
+        pass
+`
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "test.py")
+	if err := os.WriteFile(tmpFile, []byte(src), 0600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	tier2, err := Compress(tmpFile, []byte(src), 2)
+	if err != nil {
+		t.Fatalf("Compress tier 2 error: %v", err)
+	}
+
+	// Let's write the folded bytes to a file
+	foldedFile := filepath.Join(tmpDir, "folded.py")
+	if err := os.WriteFile(foldedFile, tier2, 0600); err != nil {
+		t.Fatalf("write folded file: %v", err)
+	}
+
+	// Verify syntax using python3 AST parser
+	cmd := exec.Command("python3", "-c", "import ast; ast.parse(open('" + foldedFile + "', 'rb').read())")
+	if err := cmd.Run(); err != nil {
+		t.Errorf("Folded Python output is not valid syntax: %v. Output was:\n%s", err, string(tier2))
+	}
+}
+
+func TestBinaryFileSkipping(t *testing.T) {
+	src := []byte("hello\x00world\x00this\x00is\x00binary")
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "binary_file.go")
+	if err := os.WriteFile(tmpFile, src, 0600); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+
+	res, err := Compress(tmpFile, src, 3)
+	if err != nil {
+		t.Fatalf("Compress binary file error: %v", err)
+	}
+
+	if string(res) != string(src) {
+		t.Errorf("Expected original bytes returned for binary file. Got:\n%q", string(res))
 	}
 }

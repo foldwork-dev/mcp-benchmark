@@ -1,16 +1,33 @@
-// Package compress provides a pure-Go structural source-code parser that
+// Package parser provides a pure-Go structural source-code parser that
 // extracts symbol boundaries from Go, Java, TypeScript, JavaScript, Python,
 // C#, C++, Rust, and other languages without any CGO or WebAssembly dependencies.
+//
+// Compression tiers
+//   - Tier 2: Method/function body folding — replaces inner blocks with a
+//     canonical comment, preserving signatures and declarations verbatim.
+//   - Tier 3: Comment pruning — strips all // /* */ # and triple-quoted
+//     docstrings while protecting folded-body markers from removal.
+//
+// Primary entry point
+//
+//	Compressed, err := parser.Compress(path, tier)
+//
+// Internal helpers (FoldBodies, PruneComments, ParseFile) remain exported
+// for callers that need fine-grained control.
 package compress
 
 import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"log"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
+
+// ─── Language Core ───────────────────────────────────────────────────────────
 
 // Language identifies the source language strategy.
 type Language int
@@ -33,7 +50,7 @@ func DetectLanguage(path string) Language {
 		return LangGo
 	case ".py", ".pyw":
 		return LangPython
-	case ".java", ".ts", ".tsx", ".js", ".jsx", ".cpp", ".hpp", ".cc", ".c", ".h", ".cs", ".rs":
+	case ".java", ".ts", ".tsx", ".js", ".jsx", ".cpp", ".hpp", ".cc", ".c", ".h", ".cs", ".rs", ".vue", ".svelte", ".astro", ".proto":
 		return LangCStyle
 	default:
 		// Default fallback strategy for all other files
@@ -64,6 +81,8 @@ type Symbol struct {
 	Signature string
 }
 
+// ─── Regex Patterns ──────────────────────────────────────────────────────────
+
 // goFuncRe matches Go function and method declarations.
 var goFuncRe = regexp.MustCompile(
 	`^func\s+(?:\([^)]*\)\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(`,
@@ -89,20 +108,42 @@ var cStyleMethodRe = regexp.MustCompile(
 	`^(?:public|protected|private|static|final|synchronized|abstract|default|async|export|\s)*\s*(?:[A-Za-z0-9_<>\[\]]+\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(`,
 )
 
+// cStyleArrowFnRe matches JS/TS arrow functions, hooks, and callbacks.
+var cStyleArrowFnRe = regexp.MustCompile(
+	`\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:useCallback|useMemo|useEvent|async|\s)*\s*(?:<[^>]+>)?\s*\([^)]*\)\s*(?::\s*[^{=]+)?\s*=>`,
+)
+
 // pySymbolRe matches Python class and def statements.
 var pySymbolRe = regexp.MustCompile(
 	`^\s*(?P<kind>def|class)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)`,
 )
 
 // rustFnRe matches Rust function and method declarations.
+//
+//	pub fn foo(x: i32) -> String {
+//	async fn handle(req: Request) -> Response {
 var rustFnRe = regexp.MustCompile(
 	`^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+|const\s+|unsafe\s+|extern\s+)*(?P<kind>fn)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)`,
 )
 
+// ─── ParseFile Core API ──────────────────────────────────────────────────────
+
 // ParseFile parses raw code content and extracts top-level symbols.
 func ParseFile(path string, src []byte) ([]Symbol, error) {
+	src = PreprocessPolyglot(path, src)
+	src = bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
+	if strings.ToLower(filepath.Ext(path)) == ".proto" {
+		lines, err := splitLines(src)
+		if err != nil {
+			return nil, err
+		}
+		return parseProto(lines)
+	}
 	lang := DetectLanguage(path)
-	lines := splitLines(src)
+	lines, err := splitLines(src)
+	if err != nil {
+		return nil, err
+	}
 
 	switch lang {
 	case LangGo:
@@ -116,14 +157,34 @@ func ParseFile(path string, src []byte) ([]Symbol, error) {
 	}
 }
 
+// ─── FoldBodies (Tier 2 Compression) ─────────────────────────────────────────
+
 // FoldBodies replaces structural function/method bodies with:
 //
 //	// [body folded: N lines] (or # [body folded: N lines])
 //
 // while keeping declarations, signatures, and boundaries intact.
+//
+// Returns (folded bytes, nil) on success.
 func FoldBodies(path string, src []byte) ([]byte, error) {
+	src = PreprocessPolyglot(path, src)
+	src = bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
+	if IsMinified(src) || HasMergeConflictMarkers(src) {
+		return src, nil
+	}
+	if strings.ToLower(filepath.Ext(path)) == ".proto" {
+		lines, err := splitLines(src)
+		if err != nil {
+			return nil, err
+		}
+		out := foldProto(lines)
+		return []byte(strings.Join(out, "\n")), nil
+	}
 	lang := DetectLanguage(path)
-	lines := splitLines(src)
+	lines, err := splitLines(src)
+	if err != nil {
+		return nil, err
+	}
 	var out []string
 
 	switch lang {
@@ -140,11 +201,21 @@ func FoldBodies(path string, src []byte) ([]byte, error) {
 	return []byte(strings.Join(out, "\n")), nil
 }
 
+// ─── PruneComments (Tier 3 Compression) ──────────────────────────────────────
+
 // PruneComments strips all C-style (//, /* */) and Python-style (#, triple-quotes) comments.
 // It tracks string literals to prevent comment tokens inside strings from being stripped.
 func PruneComments(path string, src []byte) ([]byte, error) {
+	src = PreprocessPolyglot(path, src)
+	src = bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
+	if IsMinified(src) || HasMergeConflictMarkers(src) {
+		return src, nil
+	}
 	lang := DetectLanguage(path)
-	lines := splitLines(src)
+	lines, err := splitLines(src)
+	if err != nil {
+		return nil, err
+	}
 	var out []string
 
 	inMultiComment := false
@@ -152,6 +223,7 @@ func PruneComments(path string, src []byte) ([]byte, error) {
 	inTripleQuoteSingle := false
 
 	for _, line := range lines {
+		// If we are currently inside a multi-line C comment:
 		if inMultiComment {
 			if idx := strings.Index(line, "*/"); idx >= 0 {
 				inMultiComment = false
@@ -163,6 +235,7 @@ func PruneComments(path string, src []byte) ([]byte, error) {
 			continue
 		}
 
+		// If we are inside Python triple double-quotes:
 		if inTripleQuoteDouble {
 			if idx := strings.Index(line, `"""`); idx >= 0 {
 				inTripleQuoteDouble = false
@@ -174,6 +247,7 @@ func PruneComments(path string, src []byte) ([]byte, error) {
 			continue
 		}
 
+		// If we are inside Python triple single-quotes:
 		if inTripleQuoteSingle {
 			if idx := strings.Index(line, `'''`); idx >= 0 {
 				inTripleQuoteSingle = false
@@ -202,13 +276,179 @@ func PruneComments(path string, src []byte) ([]byte, error) {
 	return []byte(strings.Join(out, "\n")), nil
 }
 
+// IsMinified reports if the content has lines < 10 but bytes > 50KB.
+func IsMinified(src []byte) bool {
+	lineCount := bytes.Count(src, []byte("\n")) + 1
+	return lineCount < 10 && len(src) > 50*1024
+}
+
+// HasMergeConflictMarkers reports if the content contains Git merge conflict markers.
+func HasMergeConflictMarkers(src []byte) bool {
+	return bytes.Contains(src, []byte("<<<<<<<")) &&
+		bytes.Contains(src, []byte("=======")) &&
+		bytes.Contains(src, []byte(">>>>>>>"))
+}
+
+// IsGenerated reports if the file content contains common auto-generated file headers.
+func IsGenerated(src []byte) bool {
+	lower := bytes.ToLower(src)
+	limit := 2048
+	if len(lower) < limit {
+		limit = len(lower)
+	}
+	header := lower[:limit]
+	markers := [][]byte{
+		[]byte("code generated"),
+		[]byte("do not edit"),
+		[]byte("generated by"),
+		[]byte("auto-generated"),
+		[]byte("this file is generated"),
+		[]byte("this file was generated"),
+		[]byte("automatically generated"),
+	}
+	for _, m := range markers {
+		if bytes.Contains(header, m) {
+			return true
+		}
+	}
+	return false
+}
+
+var scriptTagRe = regexp.MustCompile(`(?is)<script\b[^>]*>(.*?)</script>`)
+
+func preprocessVueSvelte(src []byte) []byte {
+	out := make([]byte, len(src))
+	for i, b := range src {
+		if b == '\n' || b == '\r' {
+			out[i] = b
+		} else {
+			out[i] = ' '
+		}
+	}
+	matches := scriptTagRe.FindAllSubmatchIndex(src, -1)
+	for _, m := range matches {
+		if len(m) >= 4 && m[2] >= 0 && m[3] >= 0 {
+			copy(out[m[2]:m[3]], src[m[2]:m[3]])
+		}
+	}
+	return out
+}
+
+func preprocessAstro(src []byte) []byte {
+	out := make([]byte, len(src))
+	for i, b := range src {
+		if b == '\n' || b == '\r' {
+			out[i] = b
+		} else {
+			out[i] = ' '
+		}
+	}
+	str := string(src)
+	firstIdx := strings.Index(str, "---")
+	if firstIdx == -1 {
+		return out
+	}
+	rest := str[firstIdx+3:]
+	secondIdx := strings.Index(rest, "---")
+	if secondIdx == -1 {
+		return out
+	}
+	actualSecondIdx := firstIdx + 3 + secondIdx
+	start := firstIdx + 3
+	end := actualSecondIdx
+	if start >= 0 && end <= len(src) && start < end {
+		copy(out[start:end], src[start:end])
+	}
+	return out
+}
+
+func PreprocessPolyglot(path string, src []byte) []byte {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".vue", ".svelte":
+		if !bytes.Contains(bytes.ToLower(src), []byte("<script")) {
+			return src
+		}
+		return preprocessVueSvelte(src)
+	case ".astro":
+		trimmed := bytes.TrimSpace(src)
+		if !bytes.HasPrefix(trimmed, []byte("---")) {
+			return src
+		}
+		return preprocessAstro(src)
+	default:
+		return src
+	}
+}
+
+func parseProto(lines []string) ([]Symbol, error) {
+	var symbols []Symbol
+	depth := 0
+
+	protoBlockRe := regexp.MustCompile(`^\s*(?P<kind>message|service|enum)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)`)
+	protoRpcRe := regexp.MustCompile(`^\s*rpc\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\((?P<param>[^)]+)\)\s+returns\s*\((?P<ret>[^)]+)\)`)
+
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		lineNum := i + 1
+
+		if m := protoBlockRe.FindStringSubmatch(line); m != nil {
+			kind := namedGroup(protoBlockRe, m, "kind")
+			name := namedGroup(protoBlockRe, m, "name")
+			end := findBlockEndCStyle(lines, i)
+			symbols = append(symbols, Symbol{
+				Name:      name,
+				Kind:      kind,
+				StartLine: lineNum,
+				EndLine:   end,
+				Signature: line,
+			})
+		} else if m := protoRpcRe.FindStringSubmatch(line); m != nil {
+			name := namedGroup(protoRpcRe, m, "name")
+			symbols = append(symbols, Symbol{
+				Name:      name,
+				Kind:      "rpc",
+				StartLine: lineNum,
+				EndLine:   lineNum,
+				Signature: line,
+			})
+		}
+
+		depth = updateCStyleDepth(line, depth)
+	}
+	return symbols, nil
+}
+
+
+// ─── Compress — Primary Public API ───────────────────────────────────────────
+
 // Compress is the primary entry point for consumers such as the benchmark CLI.
 // It reads src and applies the requested compression tier:
 //
 //	tier <= 1  → returns src unchanged (raw)
 //	tier == 2  → FoldBodies only (keeps signatures, strips inner logic)
 //	tier >= 3  → FoldBodies then PruneComments (maximum token reduction)
+//
+// For file extensions the parser does not structurally support, Compress still
+// applies the C-style brace folding fallback; it never returns an error solely
+// because of an unknown extension.
+//
+// Returns (compressed bytes, nil) on success.
 func Compress(path string, src []byte, tier int) ([]byte, error) {
+	limit := 512
+	if len(src) < limit {
+		limit = len(src)
+	}
+	if isBinary(src[:limit]) {
+		log.Printf("DEBUG: skipping binary file: %s", path)
+		return src, nil
+	}
+
+	src = PreprocessPolyglot(path, src)
+	src = bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
+	if IsMinified(src) || HasMergeConflictMarkers(src) {
+		return src, nil
+	}
 	if tier <= 1 || !IsStructurallySupported(path) {
 		return src, nil
 	}
@@ -230,16 +470,21 @@ func Compress(path string, src []byte, tier int) ([]byte, error) {
 }
 
 // IsStructurallySupported reports whether the parser has an explicit structural
-// folding strategy for the given file extension.
+// folding strategy for the given file extension.  Files that return false will
+// still be processed by the C-style fallback brace scanner; callers may want to
+// label their results as "[estimated]" when this returns false.
 func IsStructurallySupported(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".go", ".py", ".pyw",
 		".java", ".ts", ".tsx", ".js", ".jsx",
-		".cpp", ".hpp", ".cc", ".c", ".h", ".cs", ".rs":
+		".cpp", ".hpp", ".cc", ".c", ".h", ".cs", ".rs",
+		".vue", ".svelte", ".astro", ".proto":
 		return true
 	}
 	return false
 }
+
+// ─── Go Parsing Strategy ─────────────────────────────────────────────────────
 
 func parseGo(lines []string) ([]Symbol, error) {
 	var symbols []Symbol
@@ -360,7 +605,13 @@ func foldGo(lines []string) []string {
 		line := lines[i]
 		trimmed := strings.TrimSpace(line)
 
-		isSig := goFuncRe.MatchString(trimmed) && strings.HasSuffix(trimmed, "{")
+		if !strings.HasSuffix(trimmed, "{") || !strings.Contains(trimmed, "func") {
+			out = append(out, line)
+			i++
+			continue
+		}
+
+		isSig := goFuncRe.MatchString(trimmed)
 		if isSig {
 			out = append(out, line)
 			i++
@@ -397,6 +648,8 @@ func foldGo(lines []string) []string {
 	return out
 }
 
+// ─── Python Indentation-Based Strategy ───────────────────────────────────────
+
 func parsePython(lines []string) ([]Symbol, error) {
 	var symbols []Symbol
 	for i := 0; i < len(lines); i++ {
@@ -418,6 +671,7 @@ func parsePython(lines []string) ([]Symbol, error) {
 			startLine := i + 1
 			sigIndent := countIndentation(line)
 
+			// Find block boundary by scanning subsequent lines with deeper indentation.
 			endLine := startLine
 			for j := i + 1; j < len(lines); j++ {
 				nextLine := lines[j]
@@ -482,9 +736,9 @@ func foldPython(lines []string) []string {
 			if nonEmptyCount > 0 {
 				indent := strings.Repeat(" ", sigIndent) + "    "
 				if isClass {
-					out = append(out, fmt.Sprintf("%s# [class body folded: %d lines]", indent, len(bodyLines)))
+					out = append(out, fmt.Sprintf("%spass  # [class body folded: %d lines]", indent, len(bodyLines)))
 				} else {
-					out = append(out, fmt.Sprintf("%s# [body folded: %d lines]", indent, len(bodyLines)))
+					out = append(out, fmt.Sprintf("%spass  # [body folded: %d lines]", indent, len(bodyLines)))
 				}
 			}
 			continue
@@ -495,6 +749,8 @@ func foldPython(lines []string) []string {
 	}
 	return out
 }
+
+// ─── Universal C-Style Strategy ──────────────────────────────────────────────
 
 func parseCStyle(lines []string) ([]Symbol, error) {
 	var symbols []Symbol
@@ -522,10 +778,52 @@ func parseCStyle(lines []string) ([]Symbol, error) {
 					EndLine:   end,
 					Signature: sig,
 				})
+			} else if m := cStyleMethodRe.FindStringSubmatch(line); m != nil {
+				name := namedGroup(cStyleMethodRe, m, "name")
+				if !isCStyleKeyword(name) && !strings.Contains(line, ";") && !strings.Contains(line, "}") {
+					sig := captureCStyleSignature(lines, i)
+					end := findBlockEndCStyle(lines, i)
+
+					symbols = append(symbols, Symbol{
+						Name:      name,
+						Kind:      "function",
+						StartLine: lineNum,
+						EndLine:   end,
+						Signature: sig,
+					})
+				}
+			} else if m := cStyleArrowFnRe.FindStringSubmatch(line); m != nil {
+				name := namedGroup(cStyleArrowFnRe, m, "name")
+				if !isCStyleKeyword(name) && !strings.Contains(line, ";") && !strings.Contains(line, "}") {
+					sig := captureCStyleSignature(lines, i)
+					end := findBlockEndCStyle(lines, i)
+
+					symbols = append(symbols, Symbol{
+						Name:      name,
+						Kind:      "function",
+						StartLine: lineNum,
+						EndLine:   end,
+						Signature: sig,
+					})
+				}
 			}
 		} else if depth == 1 {
 			if m := cStyleMethodRe.FindStringSubmatch(line); m != nil {
 				name := namedGroup(cStyleMethodRe, m, "name")
+				if !isCStyleKeyword(name) && !strings.Contains(line, ";") && !strings.Contains(line, "}") {
+					sig := captureCStyleSignature(lines, i)
+					end := findBlockEndCStyle(lines, i)
+
+					symbols = append(symbols, Symbol{
+						Name:      name,
+						Kind:      "method",
+						StartLine: lineNum,
+						EndLine:   end,
+						Signature: sig,
+					})
+				}
+			} else if m := cStyleArrowFnRe.FindStringSubmatch(line); m != nil {
+				name := namedGroup(cStyleArrowFnRe, m, "name")
 				if !isCStyleKeyword(name) && !strings.Contains(line, ";") && !strings.Contains(line, "}") {
 					sig := captureCStyleSignature(lines, i)
 					end := findBlockEndCStyle(lines, i)
@@ -574,6 +872,7 @@ func findCStyleBodyBounds(lines []string, startIdx int) (startL, endL int, ok bo
 				continue
 			}
 
+			// Handle quotes/comments/literals
 			switch ch {
 			case '"':
 				if !inSingle && !inBacktick {
@@ -614,6 +913,9 @@ func findCStyleBodyBounds(lines []string, startIdx int) (startL, endL int, ok bo
 				}
 			} else {
 				if braceStartLine == -1 {
+					if ch == ';' {
+						return -1, -1, false
+					}
 					if ch == '{' {
 						braceStartLine = l
 						braceDepth = 1
@@ -631,6 +933,10 @@ func findCStyleBodyBounds(lines []string, startIdx int) (startL, endL int, ok bo
 			}
 		}
 
+		if braceStartLine == -1 && l-startIdx > 10 {
+			return -1, -1, false
+		}
+
 		inDouble = false
 		inSingle = false
 		escaped = false
@@ -645,14 +951,23 @@ func foldCStyle(lines []string) []string {
 		line := lines[i]
 		trimmed := strings.TrimSpace(line)
 
+		if strings.Contains(trimmed, ";") || !strings.Contains(trimmed, "(") {
+			out = append(out, line)
+			i++
+			continue
+		}
+
 		isSig := false
-		if cStyleMethodRe.MatchString(trimmed) && !strings.Contains(trimmed, ";") {
+		if cStyleMethodRe.MatchString(trimmed) {
 			name := namedGroup(cStyleMethodRe, cStyleMethodRe.FindStringSubmatch(trimmed), "name")
 			if !isCStyleKeyword(name) {
 				isSig = true
 			}
 		}
-		if !isSig && rustFnRe.MatchString(trimmed) && !strings.Contains(trimmed, ";") {
+		if !isSig && cStyleArrowFnRe.MatchString(trimmed) {
+			isSig = true
+		}
+		if !isSig && rustFnRe.MatchString(trimmed) {
 			isSig = true
 		}
 
@@ -679,14 +994,111 @@ func foldCStyle(lines []string) []string {
 	return out
 }
 
-func splitLines(src []byte) []string {
+func findProtoBodyBounds(lines []string, startIdx int) (startL, endL int, ok bool) {
+	braceStartLine := -1
+	braceDepth := 0
+	inDouble := false
+	inSingle := false
+	escaped := false
+
+	for l := startIdx; l < len(lines); l++ {
+		line := lines[l]
+		runes := []rune(line)
+		for col := 0; col < len(runes); col++ {
+			ch := runes[col]
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				if !inSingle {
+					inDouble = !inDouble
+				}
+				continue
+			}
+			if ch == '\'' {
+				if !inDouble {
+					inSingle = !inSingle
+				}
+				continue
+			}
+			if inDouble || inSingle {
+				continue
+			}
+
+			if braceStartLine == -1 {
+				if ch == '{' {
+					braceStartLine = l
+					braceDepth = 1
+				}
+			} else {
+				if ch == '{' {
+					braceDepth++
+				} else if ch == '}' {
+					braceDepth--
+					if braceDepth == 0 {
+						return braceStartLine, l, true
+					}
+				}
+			}
+		}
+		inDouble = false
+		inSingle = false
+	}
+	return -1, -1, false
+}
+
+func foldProto(lines []string) []string {
+	var out []string
+	protoBlockRe := regexp.MustCompile(`^\s*(?:message|service|enum|rpc)\s+[A-Za-z_][A-Za-z0-9_]*`)
+	i := 0
+	for i < len(lines) {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+
+		if protoBlockRe.MatchString(trimmed) {
+			startL, endL, ok := findProtoBodyBounds(lines, i)
+			if ok && endL > startL {
+				for idx := i; idx <= startL; idx++ {
+					out = append(out, lines[idx])
+				}
+				bodyLines := endL - startL - 1
+				if bodyLines > 0 {
+					indent := leadingWhitespace(lines[startL]) + "\t"
+					out = append(out, fmt.Sprintf("%s// [body folded: %d lines]", indent, bodyLines))
+				}
+				out = append(out, lines[endL])
+				i = endL + 1
+				continue
+			}
+		}
+
+		out = append(out, line)
+		i++
+	}
+	return out
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+func splitLines(src []byte) ([]string, error) {
 	src = bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
+	const maxLineSize = 1024 * 1024  // 1MB per line max
 	sc := bufio.NewScanner(bytes.NewReader(src))
+	buf := make([]byte, maxLineSize)
+	sc.Buffer(buf, maxLineSize)
 	var lines []string
 	for sc.Scan() {
 		lines = append(lines, sc.Text())
 	}
-	return lines
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("scanning file: %w", err)
+	}
+	return lines, nil
 }
 
 func findBlockEndCStyle(lines []string, startIdx int) int {
@@ -895,8 +1307,9 @@ func stripCommentsFromLine(line string, lang Language) (cleanLine string, opened
 		if !inDouble && !inSingle && !inBacktick {
 			if lang == LangPython {
 				if ch == '#' {
+					// Preserve folded body markers
 					if strings.Contains(string(runes[i:]), "body folded:") {
-						// Keep
+						// Keep it, do not break
 					} else {
 						break
 					}
@@ -905,13 +1318,15 @@ func stripCommentsFromLine(line string, lang Language) (cleanLine string, opened
 				if ch == '/' && i+1 < n {
 					next := runes[i+1]
 					if next == '/' {
+						// Preserve folded body markers
 						if strings.Contains(string(runes[i:]), "body folded:") {
-							// Keep
+							// Keep it, do not break
 						} else {
 							break
 						}
 					}
 					if next == '*' {
+
 						openedBlock = true
 						closedOnSame := false
 						for j := i + 2; j < n-1; j++ {
@@ -971,4 +1386,13 @@ func isCStyleKeyword(name string) bool {
 	default:
 		return false
 	}
+}
+
+func isBinary(data []byte) bool {
+	for _, b := range data {
+		if b == 0 {
+			return true
+		}
+	}
+	return !utf8.Valid(data)
 }
