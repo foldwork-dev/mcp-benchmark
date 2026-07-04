@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 REPO="foldwork-dev/mcp-benchmark"
 BINARY="mcp-benchmark"
 
