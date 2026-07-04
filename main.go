@@ -199,7 +199,6 @@ func runBenchmark(dir string, tier int, pricePerMillion float64) (*BenchmarkResu
 			limit = len(src)
 		}
 		if isBinary(src[:limit]) {
-			log.Printf("DEBUG: skipping binary file: %s", path)
 			return nil
 		}
 
