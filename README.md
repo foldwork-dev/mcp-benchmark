@@ -23,9 +23,9 @@ Estimate the impact of AST code compression on large open-source repositories (c
 
 |  Repository |  Total Files |  Raw Context Tokens |  Compressed Context Tokens |  Token Reduction |  Cost Saved / Run |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Django** | 2,359 | 5.5M | 1.5M | **72.6%** | **$12.09** |
-| **Spring Framework** | 9,193 | 15.0M | 5.0M | **66.4%** | **$29.94** |
-| **Next.js** | 21,848 | 23.8M | 4.9M | **79.2%** | **$56.65** |
+| **Django** | 2,359 | 5.6M | 0.6M | **89.3%** | **$15.00** |
+| **Spring Framework** | 9,193 | 15.0M | 5.2M | **65.3%** | **$29.40** |
+| **Next.js** | 21,985 | 24.0M | 10.2M | **57.5%** | **$41.40** |
 
 *Reproducible: Clone any of these repositories locally and run `mcp-benchmark` on them.*
 
@@ -54,15 +54,15 @@ mcp-benchmark ./context
 
 ════════════════════════════════════════════════════════════════════════════════
   mcp-benchmark - context
-  Tier 3 compression  |  $3.00/1M tokens  |  2026-07-04T16:29:15Z
+  Tier 3 compression  |  $3.00/1M tokens  |  2026-07-06T12:00:00Z
 ════════════════════════════════════════════════════════════════════════════════
 
 FILE                                          RAW TOKENS    COMPRESSED     SAVED   COST SAVED*
 ──────────────────────────────────────────────────────────────────────────────────────────
-cmd/license-gen/main.go                            3,633           214     94.1%       $0.0100
-main.go                                           17,555         1,917     89.1%       $0.0470
-website/api/webhook.go                             2,682           295     89.0%       $0.0070
-main_test.go                                       1,576           353     77.6%       $0.0040
+cmd/license-gen/main.go                            3,633           214     94.1%       $0.0103
+main.go                                           17,555         1,917     89.1%       $0.0469
+website/api/webhook.go                             2,682           295     89.0%       $0.0072
+main_test.go                                       1,576           353     77.6%       $0.0037
 ──────────────────────────────────────────────────────────────────────────────────────────
 TOTAL (4 files)                                   25,446         2,779     89.1%       $0.0680
 
@@ -91,7 +91,7 @@ This is the output from running mcp-benchmark on the mcp-injector source code it
 
 ##  Want the Full MCP Daemon?
 
-`mcp-benchmark` is the measurement tool. **[mcp-injector](https://foldwork.dev)** is the persistent local Model Context Protocol (MCP) server daemon that automatically integrates with **Claude Desktop**, **Cursor IDE**, and **VS Code (Continue)** to compress files live and support Compress-Cache-Retrieve (CCR) fetching.
+`mcp-benchmark` is the measurement tool. **[mcp-injector](https://foldwork.dev)** is the persistent local Model Context Protocol (MCP) server daemon that automatically integrates with **Claude Desktop**, **Cursor IDE**, **VS Code**, and **Windsurf** to compress files live and support Compress-Cache-Retrieve (CCR) fetching.
 
  Learn more at **[foldwork.dev](https://foldwork.dev)**
 
