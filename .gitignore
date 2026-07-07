@@ -1,0 +1,8 @@
+# Compiled binaries
+mcp-benchmark
+mcp-benchmark.exe
+
+# Go workspace and caches
+/.idea/
+/.vscode/
+*.out
