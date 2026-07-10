@@ -18,8 +18,8 @@ Estimate the impact of AST code compression on large open-source repositories (c
 |  Repository |  Total Files |  Raw Context Tokens |  Compressed Context Tokens |  Token Reduction |  Cost Saved / Run |
 | :--- | :---: | :---: | :---: | :---: | :---: |
 | **Django** | 2,359 | 5,554,607 | 596,752 | **89.3%** | **$10.99** |
-| **Spring Framework** | 9,193 | 15,032,871 | 5,185,299 | **65.5%** | **$29.03** |
-| **Next.js** | 21,985 | 23,963,330 | 10,212,684 | **57.4%** | **$45.88** |
+| **Tokio** | 789 | 1,597,813 | 444,164 | **72.2%** | **$3.11** |
+| **Gin** | 99 | 197,300 | 47,718 | **75.8%** | **$0.39** |
 
 *Reproducible: Clone any of these repositories locally and run `mcp-benchmark` on them.*
 
