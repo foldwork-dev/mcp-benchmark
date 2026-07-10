@@ -3,12 +3,6 @@
 Before installing anything, run this on your own codebase to see exactly how much you'd save with mcp-injector.
 
 ```bash
-npx mcp-benchmark ./your-project
-```
-
-Wait - it's a Go binary, not npm. But it's just as fast:
-
-```bash
 curl -fsSL https://raw.githubusercontent.com/foldwork-dev/mcp-benchmark/main/install.sh | sh
 mcp-benchmark ./your-project
 ```
@@ -23,9 +17,9 @@ Estimate the impact of AST code compression on large open-source repositories (c
 
 |  Repository |  Total Files |  Raw Context Tokens |  Compressed Context Tokens |  Token Reduction |  Cost Saved / Run |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Django** | 2,359 | 5.6M | 0.6M | **89.3%** | **$15.00** |
-| **Spring Framework** | 9,193 | 15.0M | 5.2M | **65.3%** | **$29.40** |
-| **Next.js** | 21,985 | 24.0M | 10.2M | **57.5%** | **$41.40** |
+| **Django** | 2,359 | 5,554,607 | 596,752 | **89.3%** | **$10.99** |
+| **Spring Framework** | 9,193 | 15,032,871 | 5,185,299 | **65.5%** | **$29.03** |
+| **Next.js** | 21,985 | 23,963,330 | 10,212,684 | **57.4%** | **$45.88** |
 
 *Reproducible: Clone any of these repositories locally and run `mcp-benchmark` on them.*
 
@@ -91,7 +85,7 @@ This is the output from running mcp-benchmark on the mcp-injector source code it
 
 ##  Want the Full MCP Daemon?
 
-`mcp-benchmark` is the measurement tool. **[mcp-injector](https://foldwork.dev)** is the persistent local Model Context Protocol (MCP) server daemon that automatically integrates with **Claude Desktop**, **Cursor IDE**, **VS Code**, and **Windsurf** to compress files live and support Compress-Cache-Retrieve (CCR) fetching.
+`mcp-benchmark` is the measurement tool. **[mcp-injector](https://foldwork.dev)** is the persistent local Model Context Protocol (MCP) server daemon that automatically integrates with **Claude Desktop**, **Cursor IDE**, **VS Code**, and **Devin Desktop** to compress files live and support Compress-Cache-Retrieve (CCR) fetching.
 
  Learn more at **[foldwork.dev](https://foldwork.dev)**
 
